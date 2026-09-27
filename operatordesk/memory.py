@@ -37,6 +37,19 @@ class ClientHistory:
             lines.append(f"still waiting on: {item} (asked {date})")
         return lines
 
+    def for_model(self) -> dict:
+        """The same history as structured data, so a model can reuse exact keys:
+        a promise is closed by putting its topic in `fulfils`, and a request is
+        matched to what the client sent by its item name."""
+        return {
+            "received_count": len(self.received),
+            "sent_count": len(self.sent),
+            "open_promises": self.open_promises,
+            "kept_promises": self.kept_promises,
+            "client_already_sent": self.provided,
+            "still_waiting_on": self.outstanding,
+        }
+
 
 def _day(ts: str) -> str:
     # "2026-09-14T09:12:00" -> "Sep 14"
@@ -45,9 +58,13 @@ def _day(ts: str) -> str:
     return f"{months[int(m) - 1]} {int(d)}"
 
 
-def build_history(ledger: Ledger, client: str) -> ClientHistory:
+def build_history(ledger: Ledger, client: str, before_seq: int | None = None) -> ClientHistory:
+    """Replay the ledger for one client. With `before_seq`, stop at that entry,
+    i.e. rebuild what the desk knew at that point."""
     h = ClientHistory(client=client)
     for e in ledger.for_client(client):
+        if before_seq is not None and e.seq >= before_seq:
+            break
         day = _day(e.ts)
         if e.kind == "received":
             h.received.append({"date": day, "subject": e.data["subject"],

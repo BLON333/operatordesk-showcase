@@ -1,17 +1,21 @@
 """The approval gate.
 
-An approval is bound to the SHA-256 of the exact draft text a person saw.
-`send()` refuses unless the draft in hand still hashes to that value, so a
-draft edited after approval (by a person or by a model) cannot go out on the
-old approval. "Sending" in this demo writes an .eml file to the outbox folder.
+An approval is bound to the SHA-256 of exactly what a person saw: the
+recipient, subject and text, plus the promises and requests the reply commits
+to (those become the client's memory once it is sent). `send()` refuses unless
+the draft in hand still hashes to that value, so a draft changed after approval
+(by a person or by a model) cannot go out on the old approval. "Sending" in
+this demo writes an .eml file to the outbox folder.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.message import EmailMessage
+from email.utils import format_datetime, make_msgid
 from pathlib import Path
 
-from .ledger import sha256
+from .ledger import canonical, sha256
 from .models import Draft
 
 
@@ -28,7 +32,10 @@ class Approval:
 
 
 def draft_hash(draft: Draft) -> str:
-    return sha256(f"{draft.to}\n{draft.subject}\n{draft.text}")
+    return sha256(canonical({
+        "to": draft.to, "subject": draft.subject, "text": draft.text,
+        "promises": draft.promises, "requests": draft.requests, "fulfils": draft.fulfils,
+    }))
 
 
 def approve(draft: Draft, reviewer: str, ts: str) -> Approval:
@@ -48,6 +55,9 @@ def send(draft: Draft, approval: Approval | None, outbox: Path, sender: str) -> 
     msg["From"] = sender
     msg["To"] = draft.to
     msg["Subject"] = draft.subject
+    when = datetime.fromisoformat(approval.ts)
+    msg["Date"] = format_datetime(when if when.tzinfo else when.replace(tzinfo=timezone.utc))
+    msg["Message-ID"] = make_msgid(idstring=draft.email_id, domain=sender.split("@")[-1])
     msg["X-OperatorDesk-Approved-By"] = approval.reviewer
     msg["X-OperatorDesk-Draft-SHA256"] = approval.draft_hash
     msg.set_content(draft.text)

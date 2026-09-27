@@ -1,8 +1,10 @@
 """Append-only, hash-chained ledger.
 
 Every event (email received, draft written, approval, send) is one JSON line.
-Each line carries the hash of the line before it, so editing or deleting any
-past entry breaks the chain and `verify()` says exactly where.
+Each line carries the hash of the line before it, so editing or deleting a
+past entry breaks the chain and `verify()` says exactly where. Someone with
+write access could recompute every later hash as well; that is caught by
+comparing the head hash against a copy pinned somewhere else.
 """
 from __future__ import annotations
 
@@ -91,7 +93,13 @@ class Ledger:
     def verify(self) -> tuple[bool, str]:
         expected_prev = GENESIS
         count = 0
-        for count, entry in enumerate(self.entries(), start=1):
+        with self.path.open(encoding="utf-8") as fh:
+            lines = [(n, line.strip()) for n, line in enumerate(fh, start=1) if line.strip()]
+        for count, (lineno, line) in enumerate(lines, start=1):
+            try:
+                entry = Entry(**json.loads(line))
+            except (ValueError, TypeError):
+                return False, f"line {lineno} is not a valid ledger entry"
             if entry.prev != expected_prev:
                 return False, f"chain broken at entry {entry.seq}: previous-hash mismatch"
             if sha256(canonical(entry.body())) != entry.hash:

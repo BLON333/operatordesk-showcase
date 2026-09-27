@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
 
@@ -143,6 +144,10 @@ class RuleDrafter:
         return d
 
 
+class DraftError(Exception):
+    """The drafter could not produce a draft (missing key, API error, bad reply)."""
+
+
 class ClaudeDrafter:
     """Same contract as RuleDrafter, backed by the Anthropic Messages API.
 
@@ -153,37 +158,58 @@ class ClaudeDrafter:
     SYSTEM = (
         "You draft email replies for a small bookkeeping firm. You never send anything; "
         "a person approves every draft. Use the client history you are given: do not ask "
-        "for items the client already sent, and if an earlier promise is open or overdue, "
-        "address it directly. Reply with JSON only: "
+        "for items listed in client_already_sent, and if an open promise is on the same "
+        "topic as the email (or overdue), address it directly and say so if we are late. "
+        "Reply with JSON only, no prose around it: "
         '{"text": str, "promises": [{"topic": str, "what": str, "due": str}], '
-        '"requests": [str], "fulfils": [str]}'
+        '"requests": [str], "fulfils": [str]}. '
+        "Rules for the structured fields: each promise topic must be one of the given "
+        "topics; due dates look like \"Fri Sep 18\". Put a topic in fulfils only when "
+        "this reply keeps an open promise on that topic. In requests, reuse the exact item "
+        "names from still_waiting_on when you ask for the same thing again."
     )
 
     def __init__(self, case_notes: dict | None = None, model: str | None = None):
         self.case_notes = case_notes or {}
-        self.model = model or os.environ.get("OPERATORDESK_MODEL", "claude-sonnet-4-5")
-        self.key = os.environ["ANTHROPIC_API_KEY"]
+        self.model = model or os.environ.get("OPERATORDESK_MODEL", "claude-sonnet-5")
+        self.key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not self.key:
+            raise DraftError("--claude needs ANTHROPIC_API_KEY set in the environment")
 
     def draft(self, email: Email, history: ClientHistory) -> Draft:
         prompt = json.dumps({
             "email": {"from": email.sender, "subject": email.subject, "body": email.body,
                       "attachments": list(email.attachments), "received": email.received},
-            "client_history": history.summary_lines(),
+            "client_history": history.for_model(),
+            "topics": [*TOPICS, "general"],
             "case_notes": self.case_notes.get(email.client, {}),
             "sign_off": SIGN_OFF,
         }, indent=2)
         req = urllib.request.Request(
             "https://api.anthropic.com/v1/messages",
-            data=json.dumps({"model": self.model, "max_tokens": 800, "system": self.SYSTEM,
+            data=json.dumps({"model": self.model, "max_tokens": 1500, "system": self.SYSTEM,
                              "messages": [{"role": "user", "content": prompt}]}).encode(),
             headers={"x-api-key": self.key, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = json.loads(resp.read())["content"][0]["text"]
-        out = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                reply = json.loads(resp.read())
+        except urllib.error.HTTPError as err:
+            detail = err.read().decode("utf-8", "replace")[:300]
+            raise DraftError(f"Claude API returned HTTP {err.code}: {detail}") from err
+        except urllib.error.URLError as err:
+            raise DraftError(f"could not reach the Claude API: {err.reason}") from err
+        if reply.get("stop_reason") == "max_tokens":
+            raise DraftError("Claude's reply was cut off before the JSON finished")
+        raw = "".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text")
+        try:
+            out = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+            text = out["text"]
+        except (ValueError, KeyError) as err:
+            raise DraftError(f"Claude did not return the expected JSON: {raw[:200]!r}") from err
         return Draft(email_id=email.id, client=email.client, to=email.sender,
-                     subject=f"Re: {email.subject.removeprefix('Re: ')}", text=out["text"],
+                     subject=f"Re: {email.subject.removeprefix('Re: ')}", text=text,
                      promises=out.get("promises", []), requests=out.get("requests", []),
                      fulfils=out.get("fulfils", []),
-                     used_memory=["history passed to Claude"] if history.sent else [])
+                     used_memory=["client history passed to Claude"] if history.sent else [])

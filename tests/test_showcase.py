@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from operatordesk.desk import Desk
+from operatordesk.cli import main
+from operatordesk.desk import Desk, simulated_clock
+from operatordesk.drafting import DraftError
 from operatordesk.gate import ApprovalError, approve, send
 from operatordesk.ledger import Ledger
 from operatordesk.memory import build_history
@@ -17,7 +19,7 @@ def approve_all(email, history, draft):
 
 
 def run_until(tmp_path, email_id, use_memory=True):
-    desk = Desk(tmp_path, INBOX, use_memory=use_memory)
+    desk = Desk(tmp_path, INBOX, use_memory=use_memory, clock=simulated_clock)
     for email in desk.emails:
         outcome = desk.process(email, approve_all)
         if email.id == email_id:
@@ -41,6 +43,15 @@ def test_edit_after_approval_voids_the_approval(tmp_path):
     draft = make_draft("Price is $300")
     approval = approve(draft, "Sam", "2026-01-01T00:00:00")
     draft.text = "Price is $250"
+    with pytest.raises(ApprovalError, match="changed after it was approved"):
+        send(draft, approval, tmp_path, "desk@x.example")
+
+
+def test_changing_a_promise_after_approval_voids_the_approval(tmp_path):
+    draft = make_draft("I'll confirm by Friday")
+    draft.promises = [{"topic": "hst", "what": "confirm the HST status", "due": "Fri Sep 18"}]
+    approval = approve(draft, "Sam", "2026-01-01T00:00:00")
+    draft.promises[0]["due"] = "Fri Oct 30"
     with pytest.raises(ApprovalError, match="changed after it was approved"):
         send(draft, approval, tmp_path, "desk@x.example")
 
@@ -116,11 +127,76 @@ def test_only_approved_replies_become_memory(tmp_path):
     assert not h.open_promises  # the unsent promise was never recorded as made
 
 
+def test_edited_reply_drops_commitments_the_reviewer_did_not_confirm(tmp_path):
+    desk = Desk(tmp_path, INBOX, clock=simulated_clock)
+    desk.process(desk.emails[0], lambda e, h, d: ("edit", "tester", "Hi Maya, on it. Sam"))
+    assert not build_history(desk.ledger, "harbourline-cafe").open_promises
+
+
+def test_edited_reply_keeps_commitments_the_reviewer_confirmed(tmp_path):
+    desk = Desk(tmp_path, INBOX, clock=simulated_clock)
+
+    def edit_and_keep(email, history, draft):
+        kept = {"promises": draft.promises, "requests": draft.requests, "fulfils": draft.fulfils}
+        return ("edit", "tester", draft.text + "\nThanks for your patience.", kept)
+
+    desk.process(desk.emails[0], edit_and_keep)
+    assert len(build_history(desk.ledger, "harbourline-cafe").open_promises) == 1
+
+
+def test_email_left_undecided_comes_back_with_the_same_history(tmp_path):
+    desk = Desk(tmp_path, INBOX, clock=simulated_clock)
+    for email in desk.emails[:7]:
+        desk.process(email, approve_all)
+    e08 = desk.emails[7]
+
+    def quit_midway(email, history, draft):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        desk.process(e08, quit_midway)
+    assert "e08" not in desk.processed_ids()
+    outcome = desk.process(e08, approve_all)  # second run
+    assert outcome.draft.requests == ["SIN and start date"]  # history as of first arrival
+    received = [e for e in desk.ledger.entries()
+                if e.kind == "received" and e.data["email_id"] == "e08"]
+    assert len(received) == 1 and desk.ledger.verify()[0]
+
+
+def test_approval_is_stamped_when_it_happens_not_when_the_email_arrived(tmp_path):
+    desk = Desk(tmp_path, INBOX)  # default: wall clock
+    desk.process(desk.emails[0], approve_all)
+    by_kind = {e.kind: e for e in desk.ledger.entries()}
+    assert by_kind["received"].ts == desk.emails[0].received
+    assert by_kind["approved"].ts > by_kind["received"].ts
+    assert by_kind["approved"].ts.endswith("+00:00")
+    assert by_kind["sent"].data["approved_at"] == by_kind["approved"].ts
+
+
+def test_malformed_ledger_line_is_reported_not_crashed_on(tmp_path):
+    desk, _ = run_until(tmp_path, "e02")
+    with desk.ledger.path.open("a") as fh:
+        fh.write("{not json\n")
+    ok, msg = Ledger(desk.ledger.path).verify()
+    assert not ok and "not a valid ledger entry" in msg
+
+
 def test_outbox_file_carries_approval_headers(tmp_path):
     desk, _ = run_until(tmp_path, "e01")
     eml = (tmp_path / "outbox" / "e01.eml").read_text()
     assert "X-OperatorDesk-Approved-By: tester" in eml
     assert "X-OperatorDesk-Draft-SHA256" in eml
+    assert "Date: " in eml and "Message-ID: " in eml
+
+
+def test_readme_commands_work_in_order(tmp_path, capsys):
+    state = str(tmp_path / "state")
+    assert main(["demo", "--state", state]) == 0
+    assert main(["verify", "--state", state]) == 0
+    assert "34 entries" in capsys.readouterr().out
+    assert main(["history", "kestrel-landscaping", "--state", state]) == 0
+    assert "still waiting on: SIN and start date" in capsys.readouterr().out
+    assert main(["compare", "e06", "--state", state]) == 0
 
 
 # -- Claude drafter contract (no network: the HTTP call is faked) ------------
@@ -129,7 +205,7 @@ def test_claude_drafter_parses_structured_reply(monkeypatch, tmp_path):
     import io
     from operatordesk import drafting
 
-    reply = {"content": [{"text": json.dumps({
+    reply = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps({
         "text": "Hi Omar,\n\nNo need, we have them.\n\nSam", "promises": [],
         "requests": [], "fulfils": []})}]}
     seen = {}
@@ -143,4 +219,27 @@ def test_claude_drafter_parses_structured_reply(monkeypatch, tmp_path):
     desk = Desk(tmp_path, INBOX, use_claude=True)
     outcome = desk.process(desk.emails[1], approve_all)
     assert outcome.decision == "sent"
-    assert "client_history" in seen["body"]["messages"][0]["content"]
+    content = seen["body"]["messages"][0]["content"]
+    assert "client_history" in content and "still_waiting_on" in content
+
+
+def test_claude_drafter_without_a_key_fails_clearly(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(DraftError, match="ANTHROPIC_API_KEY"):
+        Desk(tmp_path, INBOX, use_claude=True)
+
+
+@pytest.mark.parametrize("reply, message", [
+    ({"stop_reason": "max_tokens", "content": [{"type": "text", "text": '{"text": "Hi'}]}, "cut off"),
+    ({"stop_reason": "end_turn", "content": [{"type": "text", "text": "Sure, here you go"}]}, "expected JSON"),
+])
+def test_claude_drafter_bad_replies_raise_draft_error(monkeypatch, tmp_path, reply, message):
+    import io
+    from operatordesk import drafting
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(drafting.urllib.request, "urlopen",
+                        lambda req, timeout: io.BytesIO(json.dumps(reply).encode()))
+    desk = Desk(tmp_path, INBOX, use_claude=True)
+    with pytest.raises(DraftError, match=message):
+        desk.process(desk.emails[0], approve_all)
