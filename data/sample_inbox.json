@@ -1,0 +1,83 @@
+{
+  "firm": "Northgate Bookkeeping (fictional)",
+  "reviewer": "Sam (desk lead)",
+  "note": "Every business, person and address in this file is invented for the demo.",
+  "case_notes": {
+    "harbourline-cafe": {
+      "hst": "Your Q3 HST return is prepared and ready for your signature; once signed we file it the same day."
+    },
+    "redwood-dental": {},
+    "kestrel-landscaping": {
+      "payroll": "Payroll can be running for your two seasonal staff from the next pay period."
+    },
+    "birchwood-yoga": {}
+  },
+  "emails": [
+    {
+      "id": "e01",
+      "client": "harbourline-cafe",
+      "from": "Maya Lindqvist <maya@harbourline.example>",
+      "received": "2026-09-14T09:12:00",
+      "subject": "Q3 HST",
+      "body": "Hi, where are we on the Q3 HST filing? I want to make sure we're not late this time."
+    },
+    {
+      "id": "e02",
+      "client": "redwood-dental",
+      "from": "Dr. Omar Haddad <omar@redwooddental.example>",
+      "received": "2026-09-14T10:40:00",
+      "subject": "August statements",
+      "body": "Attached are our August bank statements. Anything else you need from us this month?",
+      "attachments": ["bank statements"]
+    },
+    {
+      "id": "e03",
+      "client": "kestrel-landscaping",
+      "from": "Jo Mercer <jo@kestrel.example>",
+      "received": "2026-09-15T08:05:00",
+      "subject": "Payroll for seasonal crew",
+      "body": "Can you set up payroll for two seasonal staff starting next month?"
+    },
+    {
+      "id": "e04",
+      "client": "birchwood-yoga",
+      "from": "Lena Ortiz <lena@birchwood.example>",
+      "received": "2026-09-15T13:30:00",
+      "subject": "New studio, need a bookkeeper",
+      "body": "We just opened a small studio. What are your rates for monthly bookkeeping?"
+    },
+    {
+      "id": "e05",
+      "client": "harbourline-cafe",
+      "from": "Maya Lindqvist <maya@harbourline.example>",
+      "received": "2026-09-19T16:02:00",
+      "subject": "Re: Q3 HST",
+      "body": "Any update on the HST?"
+    },
+    {
+      "id": "e06",
+      "client": "redwood-dental",
+      "from": "Dr. Omar Haddad <omar@redwooddental.example>",
+      "received": "2026-09-21T11:15:00",
+      "subject": "Statements",
+      "body": "Quick one: do you still need our bank statements for August?"
+    },
+    {
+      "id": "e07",
+      "client": "kestrel-landscaping",
+      "from": "Jo Mercer <jo@kestrel.example>",
+      "received": "2026-09-22T09:48:00",
+      "subject": "Re: Payroll for seasonal crew",
+      "body": "Great. What info do you need from the staff for payroll?"
+    },
+    {
+      "id": "e08",
+      "client": "kestrel-landscaping",
+      "from": "Jo Mercer <jo@kestrel.example>",
+      "received": "2026-09-24T14:20:00",
+      "subject": "Staff forms",
+      "body": "Attached are the TD1 forms and void cheques for both staff.",
+      "attachments": ["TD1 forms", "void cheques"]
+    }
+  ]
+}

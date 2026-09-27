@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "operatordesk-showcase"
+version = "0.1.0"
+description = "Approval-gated email drafting with a hash-chained ledger that doubles as per-client memory."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+operatordesk = "operatordesk.cli:main"
+
+[tool.setuptools]
+packages = ["operatordesk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
